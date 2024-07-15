@@ -89,3 +89,39 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64 sys_map_shared_pages(void) {
+    uint64 src_va, dst_va;
+    int dst_pid, size;
+
+    argint(0, &dst_pid);
+    argaddr(1, &src_va);
+    argint(2, &size);
+    
+    struct proc *dst_proc = find_proc(dst_pid);
+    if (dst_proc == 0)
+        return -1;
+
+    struct proc *src_proc = myproc();
+    if (src_proc == 0)
+        return -1;
+
+    dst_va = map_shared_pages(src_proc, dst_proc, src_va, size);
+    if (dst_va == 0){
+        release(&dst_proc->lock);
+        return 0;
+    }
+
+    release(&dst_proc->lock);
+    return dst_va;
+}
+
+uint64 sys_unmap_shared_pages(void) {
+    uint64 addr, size;
+    argaddr(0, &addr);
+    argaddr(1, &size);
+    struct proc *src_proc = myproc();
+    if (src_proc == 0)
+        return -1;
+    return unmap_shared_pages(src_proc, addr, size);
+}

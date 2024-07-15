@@ -688,3 +688,69 @@ procdump(void)
     printf("\n");
   }
 }
+
+uint64 map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, uint64 size) {
+  uint64 src_start = PGROUNDDOWN(src_va); // first page to map
+  uint64 src_end = PGROUNDUP(src_va + size);
+  uint64 nbytes = src_end - src_start; // number of bytes to map (whole pages that need to be mapped in bytes)
+  uint64 dst_va = PGROUNDUP(dst_proc->sz); // start mapping to here
+  uint64 src_offset = src_va - src_start;
+
+  uint64 pg;
+  for (pg=src_start; pg<src_end; pg+=PGSIZE, dst_va+=PGSIZE) {
+    pte_t *pte = walk(src_proc->pagetable, pg, 0);
+    if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U)) {
+      // todo: free the pages that have been mapped
+      unmap_shared_pages(dst_proc, dst_va, nbytes-dst_va);
+      return -1; 
+    }
+    uint flags = PTE_FLAGS(*pte) | PTE_S;
+
+    if (mappages(dst_proc->pagetable, dst_va, PGSIZE, PTE2PA(*pte), flags) != 0) {
+      // todo: free the pages that have been mapped
+      unmap_shared_pages(dst_proc, dst_va, nbytes-dst_va);
+      return -1; 
+    }
+  }
+  dst_proc->sz += nbytes;
+  return dst_va - nbytes + src_offset;
+}
+
+uint64 unmap_shared_pages(struct proc* p, uint64 addr, uint64 size) {
+    uint64 start, last; 
+    pte_t *pte;
+    uint64 pg;
+
+    // Ensure the addresses are page-aligned
+    start = PGROUNDDOWN(addr);
+    last = addr + size;
+    uint64 npages=0;
+    for (pg = start; pg < last; pg += PGSIZE) {
+        if ((pte = walk(p->pagetable, pg, 0)) == 0)
+            return -1; // Page table entry not found
+        
+        if (!(*pte & PTE_V) || !(*pte & PTE_S))
+            return -1; // Not a valid or not a shared mapping
+        npages++;
+    }
+    uvmunmap(p->pagetable, start, npages, 0); // Unmap the page, but do not free the physical memory
+
+    // Update the size of the process's address space
+    p->sz -= PGROUNDUP(size);
+
+    return 0;
+}
+
+
+struct proc* find_proc(int pid) {
+    struct proc *p;
+
+    for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->pid == pid && p->state != UNUSED) {
+            return p;
+        }
+        release(&p->lock);
+    }
+    return 0;
+}
